@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File to PDF Converter</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- JSZip for creating ZIP files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- FileSaver.js for saving files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.0/FileSaver.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom scrollbar for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .drag-area-active {
+            border-color: #2563eb;
+            background-color: #eff6ff;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-4xl">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-gray-900">Universal PDF Converter</h1>
+            <p class="text-gray-600 mt-2 text-lg">Convert your documents, ebooks, and images to PDF in a flash.</p>
+        </header>
+
+        <main>
+            <!-- File Upload Section -->
+            <div id="upload-area" class="bg-white p-8 rounded-2xl shadow-lg border-2 border-dashed border-gray-300 text-center cursor-pointer transition-all duration-300 hover:border-blue-500 hover:bg-blue-50">
+                <input type="file" id="file-input" multiple class="hidden">
+                <div class="flex flex-col items-center">
+                    <svg class="w-16 h-16 text-gray-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.342 0 4.5 4.5 0 01-1.41 8.775H6.75z" />
+                    </svg>
+                    <p class="text-xl font-semibold text-gray-700">Drag & drop files here</p>
+                    <p class="text-gray-500">or</p>
+                    <button id="browse-btn" class="mt-2 bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-blue-700 transition-transform transform hover:scale-105">
+                        Browse Files
+                    </button>
+                    <p class="text-xs text-gray-400 mt-4">Supports: EPUB, DOCX, PNG, JPG, and more</p>
+                </div>
+            </div>
+
+            <!-- File Processing List -->
+            <div id="file-list-container" class="mt-8 space-y-4">
+                <!-- File items will be dynamically inserted here -->
+            </div>
+
+            <!-- Download All Button -->
+            <div id="download-all-container" class="mt-8 text-center hidden">
+                <button id="download-all-btn" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg shadow-xl hover:bg-green-700 transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none">
+                    Download All as ZIP
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- DOM Element Selection ---
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+        const browseBtn = document.getElementById('browse-btn');
+        const fileListContainer = document.getElementById('file-list-container');
+        const downloadAllContainer = document.getElementById('download-all-container');
+        const downloadAllBtn = document.getElementById('download-all-btn');
+
+        // --- State Management ---
+        let fileQueue = []; // Holds file objects with their state
+        let convertedFiles = {}; // Holds successfully "converted" file data
+
+        // --- Event Listeners ---
+
+        // Trigger file input when the browse button is clicked
+        browseBtn.addEventListener('click', () => fileInput.click());
+        // Trigger file input when the whole upload area is clicked
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // Handle file selection
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+            fileInput.value = ''; // Reset for re-selection of the same file
+        });
+
+        // --- Drag and Drop Functionality ---
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-area-active');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-area-active');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-area-active');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        // --- Core Logic ---
+
+        /**
+         * Handles the selected files, adds them to the queue, and starts the process.
+         * @param {FileList} files - The files selected by the user.
+         */
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            downloadAllContainer.classList.remove('hidden');
+            
+            [...files].forEach(file => {
+                const fileId = `file-${Date.now()}-${Math.random()}`;
+                const fileObject = {
+                    id: fileId,
+                    file: file,
+                    status: 'queued', // 'uploading', 'converting', 'error', 'done'
+                    uploadProgress: 0,
+                    conversionProgress: 0,
+                };
+                fileQueue.push(fileObject);
+                createFileElement(fileObject);
+            });
+            processQueue();
+        }
+
+        /**
+         * Creates the HTML element for a file and appends it to the list.
+         * @param {object} fileObject - The file object from the queue.
+         */
+        function createFileElement(fileObject) {
+            const fileElement = document.createElement('div');
+            fileElement.id = fileObject.id;
+            fileElement.className = 'bg-white p-4 rounded-xl shadow-md flex items-center space-x-4 transition-all duration-300';
+            
+            // Determine file type and get an appropriate icon
+            const getFileIcon = (fileName) => {
+                const extension = fileName.split('.').pop().toLowerCase();
+                if (['epub'].includes(extension)) return `<svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-purple-500" viewBox="0 0 20 20" fill="currentColor"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 16c1.255 0 2.443-.29 3.5-.804V4.804zM14.5 4c1.255 0 2.443.29 3.5.804v10A7.969 7.969 0 0114.5 16c-1.255 0-2.443-.29-3.5-.804V4.804A7.968 7.968 0 0114.5 4z" /></svg>`;
+                if (['doc', 'docx'].includes(extension)) return `<svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-blue-500" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 1h8v2H6V5zm0 4h8v2H6V9zm0 4h5v2H6v-2z" clip-rule="evenodd" /></svg>`;
+                if (['png', 'jpg', 'jpeg', 'gif'].includes(extension)) return `<svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-green-500" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd" /></svg>`;
+                return `<svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gray-500" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd" /></svg>`;
+            };
+
+            fileElement.innerHTML = `
+                <div class="flex-shrink-0">
+                    ${getFileIcon(fileObject.file.name)}
+                </div>
+                <div class="flex-grow">
+                    <p class="font-semibold truncate">${fileObject.file.name}</p>
+                    <div class="status-text text-sm text-gray-500">Queued for processing...</div>
+                    <div class="progress-container mt-1">
+                        <!-- Upload Progress -->
+                        <div class="w-full bg-gray-200 rounded-full h-1.5 mb-1">
+                            <div class="upload-progress bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <!-- Conversion Progress -->
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="conversion-progress bg-green-500 h-1.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="action-button-container flex-shrink-0">
+                    <!-- Buttons will be added here -->
+                </div>
+            `;
+            fileListContainer.appendChild(fileElement);
+        }
+
+        /**
+         * Processes the file queue one by one.
+         */
+        function processQueue() {
+            const fileToProcess = fileQueue.find(f => f.status === 'queued');
+            if (!fileToProcess) {
+                checkIfAllDone();
+                return;
+            }
+            
+            fileToProcess.status = 'uploading';
+            simulateUpload(fileToProcess);
+        }
+
+        /**
+         * Simulates the file upload process with a progress bar.
+         * @param {object} fileObject - The file object to process.
+         */
+        function simulateUpload(fileObject) {
+            const fileElement = document.getElementById(fileObject.id);
+            const statusText = fileElement.querySelector('.status-text');
+            const uploadProgress = fileElement.querySelector('.upload-progress');
+            statusText.textContent = 'Uploading...';
+
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 10;
+                if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(interval);
+                    fileObject.uploadProgress = 100;
+                    uploadProgress.style.width = '100%';
+                    
+                    // Decide randomly if the file is "corrupted"
+                    // In a real app, this would be determined by the server
+                    if (Math.random() < 0.1) { // 10% chance of error
+                        handleFileError(fileObject);
+                    } else {
+                        fileObject.status = 'converting';
+                        simulateConversion(fileObject);
+                    }
+                    processQueue(); // Start processing next file in queue
+                } else {
+                    fileObject.uploadProgress = progress;
+                    uploadProgress.style.width = `${progress}%`;
+                }
+            }, 100);
+        }
+
+        /**
+         * Simulates the file conversion process.
+         * @param {object} fileObject - The file object to convert.
+         */
+        function simulateConversion(fileObject) {
+            const fileElement = document.getElementById(fileObject.id);
+            const statusText = fileElement.querySelector('.status-text');
+            const conversionProgress = fileElement.querySelector('.conversion-progress');
+            statusText.textContent = 'Converting to PDF...';
+
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 5;
+                if (progress >= 100) {
+                    progress = 100;
+                    clearInterval(interval);
+                    fileObject.conversionProgress = 100;
+                    conversionProgress.style.width = '100%';
+                    fileObject.status = 'done';
+                    handleFileSuccess(fileObject);
+                    checkIfAllDone();
+                } else {
+                    fileObject.conversionProgress = progress;
+                    conversionProgress.style.width = `${progress}%`;
+                }
+            }, 150);
+        }
+
+        /**
+         * Handles a successful file conversion.
+         * @param {object} fileObject - The successfully processed file object.
+         */
+        function handleFileSuccess(fileObject) {
+            const fileElement = document.getElementById(fileObject.id);
+            const statusText = fileElement.querySelector('.status-text');
+            const actionContainer = fileElement.querySelector('.action-button-container');
+
+            fileElement.classList.add('border-l-4', 'border-green-500');
+            statusText.textContent = 'Conversion Complete!';
+            statusText.classList.remove('text-gray-500');
+            statusText.classList.add('text-green-600', 'font-semibold');
+
+            // Add to the list of downloadable files
+            const newFileName = fileObject.file.name.split('.').slice(0, -1).join('.') + '.pdf';
+            convertedFiles[fileObject.id] = {
+                name: newFileName,
+                // In a real app, this would be the actual file blob from the server
+                blob: new Blob([`This is a dummy PDF for ${newFileName}`], { type: 'application/pdf' })
+            };
+
+            // Create and add the download button
+            const downloadBtn = document.createElement('button');
+            downloadBtn.innerHTML = `<svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>`;
+            downloadBtn.className = 'p-2 rounded-full text-green-600 bg-green-100 hover:bg-green-200 transition';
+            downloadBtn.title = `Download ${newFileName}`;
+            downloadBtn.onclick = () => {
+                saveAs(convertedFiles[fileObject.id].blob, newFileName);
+            };
+            actionContainer.innerHTML = '';
+            actionContainer.appendChild(downloadBtn);
+        }
+
+        /**
+         * Handles a file processing error.
+         * @param {object} fileObject - The file object that failed.
+         */
+        function handleFileError(fileObject) {
+            fileObject.status = 'error';
+            const fileElement = document.getElementById(fileObject.id);
+            const statusText = fileElement.querySelector('.status-text');
+            const actionContainer = fileElement.querySelector('.action-button-container');
+
+            fileElement.classList.add('border-l-4', 'border-red-500', 'opacity-70');
+            statusText.textContent = 'Error: File might be corrupted.';
+            statusText.classList.remove('text-gray-500');
+            statusText.classList.add('text-red-600', 'font-semibold');
+
+            // Create and add a remove button
+            const removeBtn = document.createElement('button');
+            removeBtn.innerHTML = `<svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>`;
+            removeBtn.className = 'p-2 rounded-full text-red-600 bg-red-100 hover:bg-red-200 transition';
+            removeBtn.title = 'Remove file';
+            removeBtn.onclick = () => {
+                fileElement.style.transform = 'translateX(100%)';
+                fileElement.style.opacity = '0';
+                setTimeout(() => {
+                    fileElement.remove();
+                    // Remove from queue to prevent re-processing
+                    fileQueue = fileQueue.filter(f => f.id !== fileObject.id);
+                    checkIfAllDone();
+                }, 300);
+            };
+            actionContainer.innerHTML = '';
+            actionContainer.appendChild(removeBtn);
+            checkIfAllDone();
+        }
+
+        /**
+         * Checks if all files in the queue are processed (done or error).
+         * Enables the "Download All" button if there are successful conversions.
+         */
+        function checkIfAllDone() {
+            const isProcessing = fileQueue.some(f => f.status === 'uploading' || f.status === 'converting' || f.status === 'queued');
+            const successfulConversions = Object.keys(convertedFiles).length;
+
+            if (!isProcessing && successfulConversions > 0) {
+                downloadAllBtn.disabled = false;
+                downloadAllBtn.textContent = `Download All (${successfulConversions}) as ZIP`;
+            } else if (!isProcessing) {
+                downloadAllBtn.disabled = true;
+                downloadAllBtn.textContent = 'No files to download';
+            } else {
+                downloadAllBtn.disabled = true;
+                downloadAllBtn.textContent = 'Processing...';
+            }
+        }
+
+        // --- Download All as ZIP Functionality ---
+        downloadAllBtn.addEventListener('click', () => {
+            if (downloadAllBtn.disabled) return;
+
+            const zip = new JSZip();
+            Object.values(convertedFiles).forEach(file => {
+                zip.file(file.name, file.blob);
+            });
+
+            downloadAllBtn.textContent = 'Zipping...';
+            downloadAllBtn.disabled = true;
+
+            zip.generateAsync({ type: 'blob' })
+                .then(function(content) {
+                    saveAs(content, `converted-files-${Date.now()}.zip`);
+                    checkIfAllDone(); // Re-enable the button after download
+                })
+                .catch(err => {
+                    console.error("Error creating ZIP file:", err);
+                    alert("There was an error creating the ZIP file.");
+                    checkIfAllDone();
+                });
+        });
+    </script>
+</body>
+</html>
